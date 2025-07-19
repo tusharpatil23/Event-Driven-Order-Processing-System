@@ -1,0 +1,128 @@
+version: '3.8'
+services:
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    volumes:
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"    
+
+
+  order-service:
+    container_name: order-service
+    image: order-service:latest
+    build:
+      context: ./order-service
+    ports:
+      - "8081:8080"
+    restart: always
+    networks: 
+      - order-processing-system
+    depends_on:
+      postgres :
+        condition: service_healthy
+      kafka :
+        condition: service_healthy
+
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/order_management
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=root
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=create
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_GROUP_ID=inventory-service-group
+      - SPRING_PROFILES_ACTIVE=docker
+
+  inventory-service:
+    container_name: inventory-service
+    image: inventory-service:latest
+    build:
+      context: ./inventory-service
+    ports:
+      - "8082:8082"
+    restart: always
+    networks:
+      - order-processing-system
+    depends_on:
+      - postgres
+      - kafka
+      - redis
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/inventory_management
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=root
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=create
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_GROUP_ID=inventory-service-group
+      - SPRING_PROFILES_ACTIVE=docker
+
+
+  postgres:
+    image: postgres:latest
+    container_name: postgres_db
+    # written init script to create two data base while initialization
+    volumes:
+      - ./init-scripts:/docker-entrypoint-initdb.d   
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      retries: 5
+    networks: 
+      - order-processing-system
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+      POSTGRES_DB: order_management
+    ports:
+      - "5432:5432"
+
+
+
+
+  kafka:
+    image: bitnami/kafka:3.6
+    container_name: kafka
+    networks: 
+      - order-processing-system
+    ports:
+      - 9092:9092
+    healthcheck:
+      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      retries: 5
+    environment:
+      - KAFKA_ENABLE_KRAFT=yes
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_BROKER_ID=1
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_CFG_NODE_ID=1
+      - KAFKA_KRAFT_CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk
+  redis:
+    image: redis:latest
+    container_name: redis-container
+    ports:
+      - "6379:6379"
+    networks:
+      - order-processing-system
+
+networks:
+  order-processing-system:
+    driver : bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  grafana-data:
